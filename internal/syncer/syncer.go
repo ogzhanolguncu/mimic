@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/cespare/xxhash/v2"
@@ -17,17 +18,18 @@ import (
 type EntryInfo struct {
 	RelativePath string      // Path relative to the root sync directory.
 	Mtime        time.Time   // Last modification timestamp.
-	Size         int64       // File size in bytes
+	Size         int64       // File size in bytes (0 for directories).
 	IsDir        bool        // True if this entry is a directory.
-	Checksum     string      // Hash of file contents
-	Permissions  os.FileMode // File mode bits
+	Checksum     string      // Hash of file contents (empty for directories).
+	Permissions  os.FileMode // Full file mode bits (type + permissions).
+	// Add IsSymlink/LinkTarget fields here when symlink support is added
 }
 
 var (
-	ErrRead     = errors.New("syncer: error reading a file or directory")
-	ErrNotExist = errors.New("syncer: file directory does not exist")
+	ErrRead     = errors.New("syncer: read error")
+	ErrNotExist = errors.New("syncer: path does not exist")
 	ErrNoDir    = errors.New("syncer: path is not a directory")
-	ErrChecksum = errors.New("syncer: failed to generate checksum")
+	ErrChecksum = errors.New("syncer: checksum calculation failed")
 )
 
 var Logger *slog.Logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
@@ -40,88 +42,136 @@ func SetLogger(l *slog.Logger) {
 	}
 }
 
-// ScanSource scans the root directory and returns a map of all entries with their information
+// ScanSource scans the root directory recursively and returns a map of all entries
+// keyed by their relative path, containing their metadata.
+// It skips the root directory itself and .DS_Store files.
+// Errors during scanning of individual files (e.g., checksum failure) are logged,
+// and the file is skipped, allowing the scan to continue. More critical errors
+// (e.g., cannot read root directory, permission denied on subdirectory traversal)
+// will halt the scan and return an error.
 func ScanSource(rootDir string) (map[string]*EntryInfo, error) {
-	Logger.Debug("starting scan of source directory", "dir", rootDir)
+	op := "ScanSource"
+	Logger.Debug("starting scan", "operation", op, "dir", rootDir)
 
-	// Check if directory exists
 	fileInfo, err := exists(rootDir)
 	if err != nil {
-		Logger.Error("root directory does not exist or is not accessible",
-			"dir", rootDir,
-			"error", err)
-		return nil, err
+		return nil, fmt.Errorf("%s: initial check failed for %q: %w", op, rootDir, err)
 	}
-
 	if !fileInfo.IsDir() {
-		Logger.Error("path is not a directory", "path", rootDir)
-		return nil, ErrNoDir
+		return nil, fmt.Errorf("%s: root path %q is not a directory: %w", op, rootDir, ErrNoDir)
 	}
 
 	entries := make(map[string]*EntryInfo)
 
-	filepath.Walk(rootDir, func(path string, info fs.FileInfo, err error) error {
-		if err != nil {
-			Logger.Error("could not read",
-				"entry", path,
-				"error", err)
-			return err
+	walkErr := filepath.WalkDir(rootDir, func(path string, d fs.DirEntry, walkErrIn error) error {
+		// Handle errors passed by WalkDir (e.g., permission reading a directory)
+		if walkErrIn != nil {
+			Logger.Error("access error during scan", "path", path, "error", walkErrIn)
+			return walkErrIn // Halt the walk
 		}
 
+		// Calculate relative path
 		relPath, err := filepath.Rel(rootDir, path)
 		if err != nil {
-			Logger.Error("could not find relative path",
-				"entry", path,
-				"error", err)
-			return err
+			return fmt.Errorf("calculate relative path for %q: %w", path, err) // Halt the walk
 		}
 
-		hash, err := generateChecksum(path)
+		// Skip the root directory itself and macOS clutter
+		// TODO: Later pass config exclude path here
+		if relPath == "." || shouldExclude(relPath, []string{".DS_Store"}) {
+			Logger.Debug("skipping entry", "path", relPath)
+			return nil // Continue walking
+		}
+
+		info, err := d.Info()
 		if err != nil {
-			return err
+			Logger.Error("cannot get file info, skipping entry", "path", path, "error", err)
+			return nil
 		}
 
-		entries[path] = &EntryInfo{
-			Mtime:        info.ModTime(),
-			Size:         info.Size(),
-			IsDir:        false,
-			Permissions:  info.Mode().Perm(),
+		isDir := d.IsDir()
+		entry := &EntryInfo{
 			RelativePath: relPath,
-			Checksum:     hex.EncodeToString(hash),
+			Mtime:        info.ModTime(),
+			Size:         info.Size(), // Size is 0 or irrelevant for dirs, but store anyway
+			IsDir:        isDir,
+			Permissions:  info.Mode(), // Store the full FileMode
+			Checksum:     "",
 		}
+
+		if !isDir {
+			checksumBytes, csErr := generateChecksum(path)
+			if csErr != nil {
+				Logger.Warn("checksum failed, skipping file", "path", path, "error", csErr)
+				return nil
+			}
+			entry.Checksum = hex.EncodeToString(checksumBytes)
+		}
+
+		entries[relPath] = entry
+		Logger.Debug("scanned entry", "path", relPath, "isDir", isDir)
 		return nil
 	})
 
+	if walkErr != nil {
+		return nil, fmt.Errorf("%s: directory walk failed for %q: %w", op, rootDir, walkErr)
+	}
+
+	Logger.Info("scan finished successfully", "operation", op, "dir", rootDir, "entries_found", len(entries))
 	return entries, nil
 }
 
+// exists checks if a path exists and returns its FileInfo.
+// Returns wrapped ErrNotExist or ErrRead on failure.
 func exists(path string) (os.FileInfo, error) {
+	op := "exists"
 	fileInfo, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			Logger.Debug("path does not exist", "path", path)
-			return nil, ErrNotExist
+			return nil, fmt.Errorf("%s: %w", op, ErrNotExist)
 		}
-		Logger.Error("error reading path", "path", path, "error", err)
-		return nil, ErrRead
+		return nil, fmt.Errorf("%s: check failed for %q: %w", op, path, ErrRead)
 	}
 	return fileInfo, nil
 }
 
+// generateChecksum calculates the xxHash checksum for a given file path.
+// Returns wrapped ErrRead or ErrChecksum on failure.
 func generateChecksum(filePath string) ([]byte, error) {
+	op := "generateChecksum"
 	file, err := os.Open(filePath)
 	if err != nil {
-		Logger.Error("failed to open file for checksum", "path", filePath, "error", err)
-		return nil, fmt.Errorf("%w: %v", ErrRead, err)
+		return nil, fmt.Errorf("%s: open failed for %q: %w", op, filePath, ErrRead)
 	}
 	defer file.Close()
 
 	hash := xxhash.New()
 	if _, err := io.Copy(hash, file); err != nil {
-		Logger.Error("failed to calculate checksum", "path", filePath, "error", err)
-		return nil, fmt.Errorf("%w: %v", ErrChecksum, err)
+		return nil, fmt.Errorf("%s: copy failed for %q: %w", op, filePath, ErrChecksum)
 	}
-
-	Logger.Debug("checksum generated successfully", "path", filePath)
 	return hash.Sum(nil), nil
+}
+
+func shouldExclude(relPath string, matchers []string) bool {
+	baseName := filepath.Base(relPath)
+	for _, pattern := range matchers {
+		if strings.HasSuffix(pattern, "/") { // Treat as directory prefix/exact match
+			dirPattern := strings.TrimSuffix(pattern, "/")
+			// Check if path is exactly this directory or inside it
+			if relPath == dirPattern || strings.HasPrefix(relPath, dirPattern+"/") {
+				return true
+			}
+		} else {
+			// Use filepath.Match for glob patterns against the base name
+			matched, _ := filepath.Match(pattern, baseName)
+			if matched {
+				return true
+			}
+			// Also handle exact matches for the whole path
+			if pattern == relPath {
+				return true
+			}
+		}
+	}
+	return false
 }
