@@ -1,0 +1,4 @@
+github.com/Cyan4973/xxHash v0.8.3 h1:H2ztCH4WZQF+3haOOoS/+U9lq7ZMekDuY2pYCKUff9o=
+github.com/Cyan4973/xxHash v0.8.3/go.mod h1:bTRtHvgKuq1Q05TkeOycuy9h7Ef9nM53UjpYyS+8DNM=
+github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
+github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
