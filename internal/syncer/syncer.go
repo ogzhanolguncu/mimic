@@ -23,14 +23,18 @@ type EntryInfo struct {
 	IsDir        bool        // True if this entry is a directory.
 	Checksum     string      // Hash of file contents (empty for directories).
 	Permissions  os.FileMode // Full file mode bits (type + permissions).
-	// Add IsSymlink/LinkTarget fields here when symlink support is added
 }
 
 var (
-	ErrRead     = errors.New("syncer: read error")
-	ErrNotExist = errors.New("syncer: path does not exist")
-	ErrNoDir    = errors.New("syncer: path is not a directory")
-	ErrChecksum = errors.New("syncer: checksum calculation failed")
+	ErrSyncerRead          = errors.New("syncer: read error")
+	ErrSyncerNotExist      = errors.New("syncer: path does not exist")
+	ErrSyncerNoDir         = errors.New("syncer: path is not a dir")
+	ErrSyncerSrcNotExists  = errors.New("syncer: src dir does not exist")
+	ErrSyncerChecksum      = errors.New("syncer: checksum calculation failed")
+	ErrEmptySrcDir         = errors.New("syncer: src dir is empty")
+	ErrEmptySrcNotADir     = errors.New("syncer: src is not a dir")
+	ErrSyncerFaultyRelPath = errors.New("syncer: rel path cannot be calculated")
+	ErrSyncerDirWalk       = errors.New("syncer: dir walk failed")
 )
 
 var Logger *slog.Logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
@@ -54,12 +58,19 @@ func ScanSource(rootDir string) (map[string]*EntryInfo, error) {
 	op := "ScanSource"
 	Logger.Debug("starting scan", "operation", op, "dir", rootDir)
 
-	fileInfo, err := exists(rootDir)
+	if rootDir == "" {
+		return nil, ErrEmptySrcDir
+	}
+	rootDir = filepath.Clean(rootDir)
+
+	fileInfo, err := retryableOpWithResult("exists", rootDir, func() (os.FileInfo, error) {
+		return exists(rootDir)
+	})
 	if err != nil {
-		return nil, fmt.Errorf("%s: initial check failed for %q: %w", op, rootDir, err)
+		return nil, fmt.Errorf("%w: %v", ErrSyncerSrcNotExists, err)
 	}
 	if !fileInfo.IsDir() {
-		return nil, fmt.Errorf("%s: root path %q is not a directory: %w", op, rootDir, ErrNoDir)
+		return nil, ErrEmptySrcNotADir
 	}
 
 	entries := make(map[string]*EntryInfo)
@@ -74,10 +85,13 @@ func ScanSource(rootDir string) (map[string]*EntryInfo, error) {
 			return walkErrIn // Halt the walk for other errors
 		}
 
-		relPath, err := filepath.Rel(rootDir, path)
+		relPath, err := retryableOpWithResult("rel_path", rootDir, func() (string, error) {
+			return filepath.Rel(rootDir, path)
+		})
 		if err != nil {
-			return fmt.Errorf("calculate relative path for %q: %w", path, err) // Halt the walk
+			return fmt.Errorf("%w: %v", ErrSyncerFaultyRelPath, err) // Halt the walk
 		}
+		relPath = filepath.Clean(relPath)
 
 		// TODO: Later pass config exclude path here
 		if relPath == "." || shouldExclude(relPath, []string{".DS_Store"}) {
@@ -85,8 +99,14 @@ func ScanSource(rootDir string) (map[string]*EntryInfo, error) {
 			return nil // Continue walking
 		}
 
-		info, err := d.Info()
+		info, err := retryableOpWithResult("file_info", rootDir, func() (fs.FileInfo, error) {
+			return d.Info()
+		})
 		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				Logger.Warn("file disappeared after detection, skipping entry", "path", path)
+				return nil
+			}
 			Logger.Error("cannot get file info, skipping entry", "path", path, "error", err)
 			return nil
 		}
@@ -102,10 +122,15 @@ func ScanSource(rootDir string) (map[string]*EntryInfo, error) {
 		}
 
 		if !isDir {
-			checksumBytes, csErr := generateChecksum(path)
+			checksumBytes, csErr := retryableOpWithResult("checksum", rootDir, func() ([]byte, error) {
+				return generateChecksum(path)
+			})
 			if csErr != nil {
+				if errors.Is(csErr, ErrSyncerNotExist) {
+					Logger.Warn("file disappeared before checksum, skipping entry", "path", path)
+					return nil
+				}
 				Logger.Warn("checksum failed, skipping file", "path", path, "error", csErr)
-				return nil
 			}
 			entry.Checksum = hex.EncodeToString(checksumBytes)
 		}
@@ -116,7 +141,7 @@ func ScanSource(rootDir string) (map[string]*EntryInfo, error) {
 	})
 
 	if walkErr != nil {
-		return nil, fmt.Errorf("%s: directory walk failed for %q: %w", op, rootDir, walkErr)
+		return nil, fmt.Errorf("%w: %v", ErrSyncerDirWalk, walkErr)
 	}
 
 	Logger.Info("scan finished successfully", "operation", op, "dir", rootDir, "entries_found", len(entries))
@@ -126,36 +151,14 @@ func ScanSource(rootDir string) (map[string]*EntryInfo, error) {
 // exists checks if a path exists and returns its FileInfo.
 // Returns wrapped ErrNotExist or ErrRead on failure.
 func exists(path string) (os.FileInfo, error) {
-	op := "exists"
 	fileInfo, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("%s: %w", op, ErrNotExist)
+			return nil, ErrSyncerNotExist
 		}
-		return nil, fmt.Errorf("%s: check failed for %q: %w", op, path, ErrRead)
+		return nil, ErrSyncerRead
 	}
 	return fileInfo, nil
-}
-
-// generateChecksum calculates the xxHash checksum for a given file path.
-// Returns wrapped ErrRead or ErrChecksum on failure.
-func generateChecksum(filePath string) ([]byte, error) {
-	op := "generateChecksum"
-	file, err := os.Open(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("%s: open failed for %q: %w", op, filePath, ErrRead)
-	}
-	defer func() {
-		if err := file.Close(); err != nil {
-			log.Printf("error closing file: %v", err)
-		}
-	}()
-
-	hash := xxhash.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return nil, fmt.Errorf("%s: copy failed for %q: %w", op, filePath, ErrChecksum)
-	}
-	return hash.Sum(nil), nil
 }
 
 func shouldExclude(relPath string, matchers []string) bool {
@@ -180,4 +183,78 @@ func shouldExclude(relPath string, matchers []string) bool {
 		}
 	}
 	return false
+}
+
+// generateChecksum calculates the xxHash checksum for a given file path.
+// Returns wrapped ErrRead or ErrChecksum on failure.
+func generateChecksum(filePath string) ([]byte, error) {
+	initialInfo, err := exists(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrSyncerSrcNotExists, err)
+	}
+
+	initialMtime := initialInfo.ModTime()
+	initialSize := initialInfo.Size()
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, ErrSyncerRead
+	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			log.Printf("error closing file: %v", err)
+		}
+	}()
+
+	hash := xxhash.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return nil, ErrSyncerChecksum
+	}
+
+	currentInfo, err := exists(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrSyncerSrcNotExists, err)
+	} else if currentInfo.ModTime() != initialMtime || currentInfo.Size() != initialSize {
+		// File changed during scan
+		Logger.Warn("file modified during checksum calculation",
+			"path", filePath,
+			"initial_mtime", initialMtime,
+			"current_mtime", currentInfo.ModTime())
+		return nil, ErrSyncerChecksum
+		//  Mark the file with a special flag in its entry (better approach)
+		// Return the checksum anyway, and handle in the caller with a flag
+	}
+
+	return hash.Sum(nil), nil
+}
+
+const maxRetries = 5
+
+// Generic retryable operation that returns a value and an error
+func retryableOpWithResult[T any](operation string, path string, op func() (T, error)) (T, error) {
+	var result T
+	var lastErr error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		r, err := op()
+		if err == nil {
+			return r, nil
+		}
+
+		// If the file disappeared, no point retrying
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, ErrSyncerNotExist) {
+			return result, err
+		}
+
+		lastErr = err
+		Logger.Warn("operation failed, retrying",
+			"operation", operation,
+			"path", path,
+			"attempt", attempt+1,
+			"error", err)
+
+		time.Sleep(time.Millisecond * 10 * time.Duration(attempt+1))
+	}
+
+	return result, lastErr
 }
