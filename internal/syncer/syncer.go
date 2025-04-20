@@ -54,7 +54,7 @@ func SetLogger(l *slog.Logger) {
 // and the file is skipped, allowing the scan to continue. More critical errors
 // (e.g., cannot read root directory, permission denied on subdirectory traversal)
 // will halt the scan and return an error.
-func ScanSource(rootDir string) (map[string]*EntryInfo, error) {
+func ScanSource(rootDir string) (map[string]EntryInfo, error) {
 	op := "ScanSource"
 	Logger.Debug("starting scan", "operation", op, "dir", rootDir)
 
@@ -73,7 +73,7 @@ func ScanSource(rootDir string) (map[string]*EntryInfo, error) {
 		return nil, ErrEmptySrcNotADir
 	}
 
-	entries := make(map[string]*EntryInfo)
+	entries := make(map[string]EntryInfo)
 
 	walkErr := filepath.WalkDir(rootDir, func(path string, d fs.DirEntry, walkErrIn error) error {
 		if walkErrIn != nil {
@@ -112,7 +112,7 @@ func ScanSource(rootDir string) (map[string]*EntryInfo, error) {
 		}
 
 		isDir := d.IsDir()
-		entry := &EntryInfo{
+		entry := EntryInfo{
 			RelativePath: relPath,
 			Mtime:        info.ModTime(),
 			Size:         info.Size(), // Size is 0 or irrelevant for dirs, but store anyway
