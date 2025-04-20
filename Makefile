@@ -64,12 +64,6 @@ run:
 	@echo "Running $(BINARY_NAME)..."
 	$(GO) run $(MAIN_PACKAGE) $(ARGS)
 
-# Run the built binary directly
-.PHONY: execute
-execute:
-	@echo "Executing built binary..."
-	./$(BUILD_DIR)/$(BINARY_NAME) $(ARGS)
-
 # Clean build artifacts
 .PHONY: clean
 clean:
@@ -97,7 +91,6 @@ help:
 	@echo "  build           - Build the application for the current platform"
 	@echo "  clean           - Remove build artifacts"
 	@echo "  deps            - Install dependencies"
-	@echo "  execute         - Execute the built binary (use ARGS=\"-source dir1 -dest dir2\")"
 	@echo "  fmt             - Format Go code"
 	@echo "  help            - Display this help message"
 	@echo "  lint            - Run golangci-lint"

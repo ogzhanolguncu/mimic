@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -64,19 +65,20 @@ func ScanSource(rootDir string) (map[string]*EntryInfo, error) {
 	entries := make(map[string]*EntryInfo)
 
 	walkErr := filepath.WalkDir(rootDir, func(path string, d fs.DirEntry, walkErrIn error) error {
-		// Handle errors passed by WalkDir (e.g., permission reading a directory)
 		if walkErrIn != nil {
+			if errors.Is(walkErrIn, fs.ErrPermission) {
+				Logger.Warn("permission denied during scan, skipping", "path", path, "error", walkErrIn)
+				return fs.SkipDir
+			}
 			Logger.Error("access error during scan", "path", path, "error", walkErrIn)
-			return walkErrIn // Halt the walk
+			return walkErrIn // Halt the walk for other errors
 		}
 
-		// Calculate relative path
 		relPath, err := filepath.Rel(rootDir, path)
 		if err != nil {
 			return fmt.Errorf("calculate relative path for %q: %w", path, err) // Halt the walk
 		}
 
-		// Skip the root directory itself and macOS clutter
 		// TODO: Later pass config exclude path here
 		if relPath == "." || shouldExclude(relPath, []string{".DS_Store"}) {
 			Logger.Debug("skipping entry", "path", relPath)
@@ -143,7 +145,11 @@ func generateChecksum(filePath string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: open failed for %q: %w", op, filePath, ErrRead)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			log.Printf("error closing file: %v", err)
+		}
+	}()
 
 	hash := xxhash.New()
 	if _, err := io.Copy(hash, file); err != nil {

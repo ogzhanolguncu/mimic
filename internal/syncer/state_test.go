@@ -13,7 +13,7 @@ func TestSaveAndLoadState(t *testing.T) {
 	// Create temporary directory for testing
 	tempDir, err := os.MkdirTemp("", "sync_state_test")
 	require.NoError(t, err)
-	defer os.RemoveAll(tempDir) // Clean up after test
+	defer require.NoError(t, os.RemoveAll(tempDir))
 
 	originalState := &SyncState{
 		Version:  0,
@@ -60,7 +60,7 @@ func TestLoadStateNonExistent(t *testing.T) {
 	// Create temporary directory for testing
 	tempDir, err := os.MkdirTemp("", "sync_state_test_nonexistent")
 	require.NoError(t, err)
-	defer os.RemoveAll(tempDir)
+	defer require.NoError(t, os.RemoveAll(tempDir))
 
 	// Test LoadState on a directory with no existing state file
 	state, err := LoadState(tempDir)
