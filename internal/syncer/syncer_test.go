@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -205,6 +206,219 @@ func TestShouldExclude(t *testing.T) {
 			require.Equal(t, tc.shouldExclude, result,
 				"Expected shouldExclude(%q, %v) to be %v, got %v",
 				tc.relPath, tc.matchers, tc.shouldExclude, result)
+		})
+	}
+}
+
+func TestShouldCompareStates(t *testing.T) {
+	fixedTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
+	testCases := []struct {
+		name          string
+		sourceScan    map[string]EntryInfo
+		loadedEntries map[string]EntryInfo
+		expected      []SyncAction
+	}{
+		{
+			name: "CreateNewFile",
+			sourceScan: map[string]EntryInfo{
+				"file1.txt": {
+					RelativePath: "file1.txt",
+					Mtime:        fixedTime,
+					Size:         100,
+					IsDir:        false,
+				},
+			},
+			loadedEntries: map[string]EntryInfo{},
+			expected: []SyncAction{
+				{
+					Type:         ActionCreate,
+					RelativePath: "file1.txt",
+					SourceInfo: EntryInfo{
+						RelativePath: "file1.txt",
+						Mtime:        fixedTime,
+						Size:         100,
+						IsDir:        false,
+					},
+				},
+			},
+		},
+		{
+			name: "UpdateExistingFile",
+			sourceScan: map[string]EntryInfo{
+				"file1.txt": {
+					RelativePath: "file1.txt",
+					Mtime:        fixedTime,
+					Size:         200, // Changed size
+					IsDir:        false,
+				},
+			},
+			loadedEntries: map[string]EntryInfo{
+				"file1.txt": {
+					RelativePath: "file1.txt",
+					Mtime:        fixedTime.Add(-10 * time.Minute), // Older time
+					Size:         100,                              // Original size
+					IsDir:        false,
+				},
+			},
+			expected: []SyncAction{
+				{
+					Type:         ActionUpdate,
+					RelativePath: "file1.txt",
+					SourceInfo: EntryInfo{
+						RelativePath: "file1.txt",
+						Mtime:        fixedTime,
+						Size:         200,
+						IsDir:        false,
+					},
+				},
+			},
+		},
+		{
+			name:       "DeleteRemovedFile",
+			sourceScan: map[string]EntryInfo{},
+			loadedEntries: map[string]EntryInfo{
+				"file1.txt": {
+					RelativePath: "file1.txt",
+					Mtime:        fixedTime.Add(-10 * time.Minute),
+					Size:         100,
+					IsDir:        false,
+				},
+			},
+			expected: []SyncAction{
+				{
+					Type:         ActionDelete,
+					RelativePath: "file1.txt",
+					SourceInfo:   EntryInfo{},
+				},
+			},
+		},
+		{
+			name: "NoChangeNeeded",
+			sourceScan: map[string]EntryInfo{
+				"file1.txt": {
+					RelativePath: "file1.txt",
+					Mtime:        fixedTime,
+					Size:         100,
+					IsDir:        false,
+				},
+			},
+			loadedEntries: map[string]EntryInfo{
+				"file1.txt": {
+					RelativePath: "file1.txt",
+					Mtime:        fixedTime,
+					Size:         100,
+					IsDir:        false,
+				},
+			},
+			expected: []SyncAction{
+				{
+					Type:         ActionNone,
+					RelativePath: "file1.txt",
+					SourceInfo:   EntryInfo{},
+				},
+			},
+		},
+		{
+			name: "MixedOperations",
+			sourceScan: map[string]EntryInfo{
+				"file1.txt": {
+					RelativePath: "file1.txt",
+					Mtime:        time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
+					Size:         100,
+					IsDir:        false,
+				},
+				"file2.txt": {
+					RelativePath: "file2.txt",
+					Mtime:        fixedTime,
+					Size:         200,
+					IsDir:        false,
+				},
+				"dir1": {
+					RelativePath: "dir1",
+					Mtime:        fixedTime,
+					Size:         0,
+					IsDir:        true,
+				},
+			},
+			loadedEntries: map[string]EntryInfo{
+				"file1.txt": {
+					RelativePath: "file1.txt",
+					Mtime:        time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
+					Size:         100,
+					IsDir:        false,
+				},
+				"oldfile.txt": {
+					RelativePath: "oldfile.txt",
+					Mtime:        fixedTime.Add(-24 * time.Hour),
+					Size:         50,
+					IsDir:        false,
+				},
+			},
+			expected: []SyncAction{
+				{
+					Type:         ActionNone,
+					RelativePath: "file1.txt",
+					SourceInfo:   EntryInfo{},
+				},
+				{
+					Type:         ActionCreate,
+					RelativePath: "file2.txt",
+					SourceInfo: EntryInfo{
+						RelativePath: "file2.txt",
+						Mtime:        fixedTime,
+						Size:         200,
+						IsDir:        false,
+					},
+				},
+				{
+					Type:         ActionCreate,
+					RelativePath: "dir1",
+					SourceInfo: EntryInfo{
+						RelativePath: "dir1",
+						Mtime:        fixedTime,
+						Size:         0,
+						IsDir:        true,
+					},
+				},
+				{
+					Type:         ActionDelete,
+					RelativePath: "oldfile.txt",
+					SourceInfo:   EntryInfo{},
+				},
+			},
+		},
+		{
+			name: "WithinTimeThreshold",
+			sourceScan: map[string]EntryInfo{
+				"file1.txt": {
+					RelativePath: "file1.txt",
+					Mtime:        time.Date(2023, 1, 1, 12, 0, 0, 500*1000*1000, time.UTC), // 500ms difference
+					Size:         100,
+					IsDir:        false,
+				},
+			},
+			loadedEntries: map[string]EntryInfo{
+				"file1.txt": {
+					RelativePath: "file1.txt",
+					Mtime:        time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
+					Size:         100,
+					IsDir:        false,
+				},
+			},
+			expected: []SyncAction{
+				{
+					Type:         ActionNone, // Should be considered the same due to threshold
+					RelativePath: "file1.txt",
+					SourceInfo:   EntryInfo{},
+				},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := CompareStates(tc.sourceScan, tc.loadedEntries)
+			require.Equal(t, tc.expected, result)
 		})
 	}
 }

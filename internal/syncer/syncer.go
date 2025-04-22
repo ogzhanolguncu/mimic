@@ -16,6 +16,19 @@ import (
 	"github.com/cespare/xxhash/v2"
 )
 
+const (
+	ActionNone   = 0x00
+	ActionCreate = 0x01
+	ActionUpdate = 0x02
+	ActionDelete = 0x03
+)
+
+type SyncAction struct {
+	Type         int
+	RelativePath string
+	SourceInfo   EntryInfo
+}
+
 type EntryInfo struct {
 	RelativePath string      // Path relative to the root sync directory.
 	Mtime        time.Time   // Last modification timestamp.
@@ -257,4 +270,50 @@ func retryableOpWithResult[T any](operation string, path string, op func() (T, e
 	}
 
 	return result, lastErr
+}
+
+// ------- SYNC ACTIONS -------
+
+func CompareStates(sourceScan, loadedStateEntries map[string]EntryInfo) []SyncAction {
+	var syncActions []SyncAction
+	const timeDiffThreshold = 1 * time.Second
+
+	// Process source entries (creates and updates)
+	for path, source := range sourceScan {
+		entry, found := loadedStateEntries[path]
+
+		if !found {
+			// New file - create action
+			syncActions = append(syncActions, SyncAction{
+				Type: ActionCreate, RelativePath: path, SourceInfo: source,
+			})
+			continue
+		}
+
+		// Check if file is unchanged
+		timeDiff := source.Mtime.Sub(entry.Mtime)
+		sameTime := timeDiff < timeDiffThreshold && timeDiff > -timeDiffThreshold
+		sameSize := source.Size == entry.Size
+
+		if sameTime && sameSize {
+			syncActions = append(syncActions, SyncAction{
+				Type: ActionNone, RelativePath: path, SourceInfo: EntryInfo{},
+			})
+		} else {
+			syncActions = append(syncActions, SyncAction{
+				Type: ActionUpdate, RelativePath: path, SourceInfo: source,
+			})
+		}
+	}
+
+	// Process loaded entries (deletes)
+	for path := range loadedStateEntries {
+		if _, exists := sourceScan[path]; !exists {
+			syncActions = append(syncActions, SyncAction{
+				Type: ActionDelete, RelativePath: path, SourceInfo: EntryInfo{},
+			})
+		}
+	}
+
+	return syncActions
 }
