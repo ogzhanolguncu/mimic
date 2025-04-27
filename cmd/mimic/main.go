@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/ogzhanolguncu/mimic/internal/config"
+	dryrun "github.com/ogzhanolguncu/mimic/internal/dry_run"
 	"github.com/ogzhanolguncu/mimic/internal/flags"
 	"github.com/ogzhanolguncu/mimic/internal/logger"
 	"github.com/ogzhanolguncu/mimic/internal/syncer"
@@ -61,6 +62,11 @@ func runSync(srcDir string, dstDir string, cfg *config.Config) error {
 	// Compare states and determine actions
 	logger.Info("Comparing states")
 	actions := syncer.CompareStates(sourceEntries, state.Entries)
+
+	if cfg.DryRun {
+		dryrun.PrintFullReport(actions)
+		return nil
+	}
 
 	// Filter out "none" actions for reporting
 	actionCount := len(slices.DeleteFunc(slices.Clone(actions), func(a syncer.SyncAction) bool {
