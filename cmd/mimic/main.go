@@ -7,32 +7,34 @@ import (
 	"slices"
 
 	"github.com/ogzhanolguncu/mimic/internal/config"
+	"github.com/ogzhanolguncu/mimic/internal/flags"
 	"github.com/ogzhanolguncu/mimic/internal/logger"
 	"github.com/ogzhanolguncu/mimic/internal/syncer"
 )
 
 func main() {
-	verbose := flag.Bool("verbose", false, "Enable detailed debug logging")
-	dryRun := flag.Bool("dry-run", false, "Simulate operations without making changes")
-	useChecksum := flag.Bool("checksum", false, "Use checksum comparison instead of mtime/size")
-	flag.Parse()
+	cfg := flags.Parse()
+	setupLogging(cfg.Verbose)
 
-	if flag.NArg() != 2 {
-		logger.Error("Usage: go_sync [options] <source_directory> <destination_directory>")
-		flag.PrintDefaults()
-		os.Exit(1)
+	args := flag.Args()
+	srcDir, dstDir := args[0], args[1]
+
+	logger.Info("Starting sync process",
+		"source", srcDir,
+		"destination", dstDir,
+		"config", cfg)
+
+	if err := runSync(srcDir, dstDir, cfg); err != nil {
+		logger.Fatal("Sync process failed", "error", err)
 	}
 
-	srcDir := flag.Arg(0)
-	dstDir := flag.Arg(1)
+	logger.Info("Sync process completed successfully")
+}
 
-	cfg := config.NewDefaultConfig()
-	cfg.Verbose = *verbose
-	cfg.DryRun = *dryRun
-	cfg.Checksum = *useChecksum
-
+// setupLogging configures the logger based on verbose setting
+func setupLogging(verbose bool) {
 	logLevel := slog.LevelInfo
-	if cfg.Verbose {
+	if verbose {
 		logLevel = slog.LevelDebug
 	}
 
@@ -40,40 +42,39 @@ func main() {
 		Level:  logLevel,
 		Output: os.Stderr,
 	})
+}
 
-	logger.Info("Starting sync process",
-		"source", srcDir,
-		"destination", dstDir,
-		"config", cfg)
-
+// runSync performs the actual synchronization process
+func runSync(srcDir string, dstDir string, cfg *config.Config) error {
+	// Load or create state
 	state, err := syncer.LoadState(dstDir)
 	if err != nil {
-		logger.Error("Failed to scan load or create state", "error", err)
-		os.Exit(1)
+		return err
 	}
 
+	// Scan source directory
 	sourceEntries, err := syncer.ScanSource(srcDir)
 	if err != nil {
-		logger.Error("Failed to scan source directory", "error", err)
-		os.Exit(1)
+		return err
 	}
 
+	// Compare states and determine actions
 	logger.Info("Comparing states")
 	actions := syncer.CompareStates(sourceEntries, state.Entries)
-	logger.Info("Found actions to perform", "count", len(actions))
 
-	logger.Info("Executing states")
-	err = syncer.ExecuteActions(srcDir, dstDir, actions)
-	if err != nil {
-		logger.Fatal("Failed to execute actions", "error", err)
+	// Filter out "none" actions for reporting
+	actionCount := len(slices.DeleteFunc(slices.Clone(actions), func(a syncer.SyncAction) bool {
+		return a.Type == syncer.ActionNone
+	}))
+	logger.Info("Found actions to perform", "count", actionCount)
+
+	// Execute actions
+	logger.Info("Executing sync actions")
+	if err := syncer.ExecuteActions(srcDir, dstDir, actions, cfg); err != nil {
+		return err
 	}
 
+	// Update and save state
 	state.Entries = sourceEntries
-	syncer.SaveState(dstDir, state)
-
-	actions = slices.DeleteFunc(actions, func(a syncer.SyncAction) bool {
-		return a.Type == syncer.ActionNone
-	})
-
-	logger.Info("Sync process completed successfully", "actions", len(actions))
+	return syncer.SaveState(dstDir, state)
 }

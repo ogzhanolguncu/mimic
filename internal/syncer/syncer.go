@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cespare/xxhash/v2"
+	"github.com/ogzhanolguncu/mimic/internal/config"
 	"github.com/ogzhanolguncu/mimic/internal/fileops"
 	"github.com/ogzhanolguncu/mimic/internal/logger"
 )
@@ -53,7 +54,6 @@ var (
 
 // ScanSource scans the root directory recursively and returns a map of all entries
 // keyed by their relative path, containing their metadata.
-// It skips the root directory itself and .DS_Store files.
 // Errors during scanning of individual files (e.g., checksum failure) are logged,
 // and the file is skipped, allowing the scan to continue. More critical errors
 // (e.g., cannot read root directory, permission denied on subdirectory traversal)
@@ -308,7 +308,7 @@ func CompareStates(sourceScan, loadedStateEntries map[string]EntryInfo) []SyncAc
 	return syncActions
 }
 
-func ExecuteActions(srcRoot, dstRoot string, actions []SyncAction) error {
+func ExecuteActions(srcRoot, dstRoot string, actions []SyncAction, cfg *config.Config) error {
 	for _, action := range actions {
 		readPath := filepath.Join(srcRoot, action.RelativePath)
 		writePath := filepath.Join(dstRoot, action.RelativePath)
@@ -324,7 +324,7 @@ func ExecuteActions(srcRoot, dstRoot string, actions []SyncAction) error {
 					return err
 				}
 			} else {
-				_, err := fileops.CopyFile(readPath, writePath)
+				_, err := fileops.CopyFile(readPath, writePath, cfg.ChunkSize)
 				if err != nil {
 					return err
 				}
@@ -335,7 +335,7 @@ func ExecuteActions(srcRoot, dstRoot string, actions []SyncAction) error {
 				return err
 			}
 		case ActionUpdate:
-			_, err := fileops.CopyFile(readPath, writePath)
+			_, err := fileops.CopyFile(readPath, writePath, cfg.ChunkSize)
 			if err != nil {
 				return err
 			}

@@ -22,10 +22,8 @@ var (
 	ErrBatchWrite = errors.New("file_ops: failed to batch write")
 )
 
-const chunkSize = 16 << 20
-
 // CopyFile copies a file from readPath to writePath, preserving permissions
-func CopyFile(readPath, writePath string) (bool, error) {
+func CopyFile(readPath, writePath string, chunkSize int64) (bool, error) {
 	// Get source file info to preserve permissions
 	srcInfo, err := os.Stat(readPath)
 	if err != nil {
@@ -33,7 +31,7 @@ func CopyFile(readPath, writePath string) (bool, error) {
 	}
 	if srcInfo.Size() >= chunkSize {
 		logger.Debug("Running batched copy", "file", srcInfo.Name(), "size", srcInfo.Size())
-		return copyFileBatching(readPath, writePath)
+		return copyFileBatching(readPath, writePath, chunkSize)
 	}
 	// Ensure parent directory exists
 	if err := os.MkdirAll(filepath.Dir(writePath), 0755); err != nil {
@@ -52,7 +50,7 @@ func CopyFile(readPath, writePath string) (bool, error) {
 	return true, nil
 }
 
-func copyFileBatching(readPath, writePath string) (bool, error) {
+func copyFileBatching(readPath, writePath string, chunkSize int64) (bool, error) {
 	// Get source file info to preserve permissions
 	srcInfo, err := os.Stat(readPath)
 	if err != nil {

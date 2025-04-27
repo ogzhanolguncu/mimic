@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ogzhanolguncu/mimic/internal/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,7 +25,7 @@ func TestCopyFile(t *testing.T) {
 	require.NoError(t, err, "Failed to create source file")
 
 	// Copy file
-	success, err := CopyFile(sourcePath, destPath)
+	success, err := CopyFile(sourcePath, destPath, config.DefaultChunkSize)
 	require.NoError(t, err, "CopyFile should not return error")
 	require.True(t, success, "CopyFile should return success")
 
@@ -35,7 +36,7 @@ func TestCopyFile(t *testing.T) {
 
 	// Test case 2: Copy to a destination in a non-existent directory
 	nestedDestPath := filepath.Join(tempDir, "subdir", "nested", "destination.txt")
-	success, err = CopyFile(sourcePath, nestedDestPath)
+	success, err = CopyFile(sourcePath, nestedDestPath, config.DefaultChunkSize)
 	require.NoError(t, err, "CopyFile should create parent directories")
 	require.True(t, success, "CopyFile should return success")
 
@@ -46,7 +47,7 @@ func TestCopyFile(t *testing.T) {
 
 	// Test case 3: Source file doesn't exist
 	nonExistPath := filepath.Join(tempDir, "nonexistent.txt")
-	success, err = CopyFile(nonExistPath, destPath)
+	success, err = CopyFile(nonExistPath, destPath, config.DefaultChunkSize)
 	require.Error(t, err, "CopyFile should return error for non-existent source")
 	require.False(t, success, "CopyFile should not return success")
 }
@@ -63,7 +64,7 @@ func TestLargeFileCopy(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	// Create a large file (slightly larger than chunkSize)
-	largeSize := chunkSize + 1024
+	largeSize := config.DefaultChunkSize + 1024
 	sourcePath := filepath.Join(tempDir, "large_source.bin")
 	destPath := filepath.Join(tempDir, "large_dest.bin")
 
@@ -89,10 +90,10 @@ func TestLargeFileCopy(t *testing.T) {
 	// Verify the file size
 	info, err := os.Stat(sourcePath)
 	require.NoError(t, err, "Failed to stat large file")
-	require.GreaterOrEqual(t, info.Size(), int64(chunkSize), "Test file should be larger than chunk size")
+	require.GreaterOrEqual(t, info.Size(), int64(config.DefaultChunkSize), "Test file should be larger than chunk size")
 
 	// Perform the copy
-	success, err := CopyFile(sourcePath, destPath)
+	success, err := CopyFile(sourcePath, destPath, config.DefaultChunkSize)
 	require.NoError(t, err, "Failed to copy large file")
 	require.True(t, success, "CopyFile should return success")
 
