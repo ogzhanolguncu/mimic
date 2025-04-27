@@ -7,7 +7,6 @@ import (
 	"io"
 	"io/fs"
 	"log"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/ogzhanolguncu/mimic/internal/fileops"
+	"github.com/ogzhanolguncu/mimic/internal/logger"
 )
 
 const (
@@ -51,16 +51,6 @@ var (
 	ErrSyncerDirWalk       = errors.New("syncer: dir walk failed")
 )
 
-var Logger *slog.Logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-	Level: slog.LevelInfo,
-}))
-
-func SetLogger(l *slog.Logger) {
-	if l != nil {
-		Logger = l
-	}
-}
-
 // ScanSource scans the root directory recursively and returns a map of all entries
 // keyed by their relative path, containing their metadata.
 // It skips the root directory itself and .DS_Store files.
@@ -70,7 +60,7 @@ func SetLogger(l *slog.Logger) {
 // will halt the scan and return an error.
 func ScanSource(rootDir string) (map[string]EntryInfo, error) {
 	op := "ScanSource"
-	Logger.Debug("starting scan", "operation", op, "dir", rootDir)
+	logger.Debug("starting scan", "operation", op, "dir", rootDir)
 
 	if rootDir == "" {
 		return nil, ErrEmptySrcDir
@@ -92,10 +82,10 @@ func ScanSource(rootDir string) (map[string]EntryInfo, error) {
 	walkErr := filepath.WalkDir(rootDir, func(path string, d fs.DirEntry, walkErrIn error) error {
 		if walkErrIn != nil {
 			if errors.Is(walkErrIn, fs.ErrPermission) {
-				Logger.Warn("permission denied during scan, skipping", "path", path, "error", walkErrIn)
+				logger.Warn("permission denied during scan, skipping", "path", path, "error", walkErrIn)
 				return fs.SkipDir
 			}
-			Logger.Error("access error during scan", "path", path, "error", walkErrIn)
+			logger.Error("access error during scan", "path", path, "error", walkErrIn)
 			return walkErrIn // Halt the walk for other errors
 		}
 
@@ -109,7 +99,7 @@ func ScanSource(rootDir string) (map[string]EntryInfo, error) {
 
 		// TODO: Later pass config exclude path here
 		if relPath == "." || shouldExclude(relPath, []string{".DS_Store"}) {
-			Logger.Debug("skipping entry", "path", relPath)
+			logger.Debug("skipping entry", "path", relPath)
 			return nil // Continue walking
 		}
 
@@ -118,10 +108,10 @@ func ScanSource(rootDir string) (map[string]EntryInfo, error) {
 		})
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
-				Logger.Warn("file disappeared after detection, skipping entry", "path", path)
+				logger.Warn("file disappeared after detection, skipping entry", "path", path)
 				return nil
 			}
-			Logger.Error("cannot get file info, skipping entry", "path", path, "error", err)
+			logger.Error("cannot get file info, skipping entry", "path", path, "error", err)
 			return nil
 		}
 
@@ -141,16 +131,16 @@ func ScanSource(rootDir string) (map[string]EntryInfo, error) {
 			})
 			if csErr != nil {
 				if errors.Is(csErr, ErrSyncerNotExist) {
-					Logger.Warn("file disappeared before checksum, skipping entry", "path", path)
+					logger.Warn("file disappeared before checksum, skipping entry", "path", path)
 					return nil
 				}
-				Logger.Warn("checksum failed, skipping file", "path", path, "error", csErr)
+				logger.Warn("checksum failed, skipping file", "path", path, "error", csErr)
 			}
 			entry.Checksum = hex.EncodeToString(checksumBytes)
 		}
 
 		entries[relPath] = entry
-		Logger.Debug("scanned entry", "path", relPath, "isDir", isDir)
+		logger.Debug("scanned entry", "path", relPath, "isDir", isDir)
 		return nil
 	})
 
@@ -158,7 +148,7 @@ func ScanSource(rootDir string) (map[string]EntryInfo, error) {
 		return nil, fmt.Errorf("%w: %v", ErrSyncerDirWalk, walkErr)
 	}
 
-	Logger.Info("scan finished successfully", "operation", op, "dir", rootDir, "entries_found", len(entries))
+	logger.Info("scan finished successfully", "operation", op, "dir", rootDir, "entries_found", len(entries))
 	return entries, nil
 }
 
@@ -229,7 +219,7 @@ func generateChecksum(filePath string) ([]byte, error) {
 		return nil, fmt.Errorf("%w: %v", ErrSyncerSrcNotExists, err)
 	} else if currentInfo.ModTime() != initialMtime || currentInfo.Size() != initialSize {
 		// File changed during scan
-		Logger.Warn("file modified during checksum calculation",
+		logger.Warn("file modified during checksum calculation",
 			"path", filePath,
 			"initial_mtime", initialMtime,
 			"current_mtime", currentInfo.ModTime())
@@ -260,7 +250,7 @@ func retryableOpWithResult[T any](operation string, path string, op func() (T, e
 		}
 
 		lastErr = err
-		Logger.Warn("operation failed, retrying",
+		logger.Warn("operation failed, retrying",
 			"operation", operation,
 			"path", path,
 			"attempt", attempt+1,
@@ -350,7 +340,7 @@ func ExecuteActions(srcRoot, dstRoot string, actions []SyncAction) error {
 				return err
 			}
 		default:
-			Logger.Error("unknown action",
+			logger.Error("unknown action",
 				"action", action.Type)
 
 		}

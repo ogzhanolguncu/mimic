@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/ogzhanolguncu/mimic/internal/logger"
 )
 
 type SyncState struct {
@@ -36,14 +38,14 @@ func LoadState(dstDir string) (*SyncState, error) {
 	}
 
 	op := "LoadState"
-	Logger.Debug("loading state", "operation", op, "dir", dstDir)
+	logger.Debug("loading state", "operation", op, "dir", dstDir)
 
 	stateFileLocation := filepath.Join(dstDir, stateFile)
 
 	_, err := os.Stat(stateFileLocation)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			Logger.Info("state file does not exist, creating new one", "operation", op, "path", stateFileLocation)
+			logger.Info("state file does not exist, creating new one", "operation", op, "path", stateFileLocation)
 
 			data := &SyncState{
 				Version:  1,
@@ -78,7 +80,7 @@ func SaveState(dstDir string, state *SyncState) error {
 	}
 
 	op := "SaveState"
-	Logger.Debug("saving state", "operation", op, "dir", dstDir)
+	logger.Debug("saving state", "operation", op, "dir", dstDir)
 
 	stateFileLocation := filepath.Join(dstDir, stateFile)
 
@@ -103,6 +105,6 @@ func SaveState(dstDir string, state *SyncState) error {
 		return fmt.Errorf("%w: %v", ErrSyncStateReplace, err)
 	}
 
-	Logger.Info("state saved successfully", "operation", op)
+	logger.Info("state saved successfully", "operation", op)
 	return nil
 }
