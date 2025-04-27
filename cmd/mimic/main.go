@@ -54,6 +54,11 @@ func main() {
 		logger.Error("Failed to scan source directory", "error", err)
 		os.Exit(1)
 	}
+
+	logger.Info("Comparing states.")
+	actions := syncer.CompareStates(sourceEntries, state.Entries)
+	log.Printf("\nFound %d actions to perform. Actions: %+v\n", len(actions), actions)
+
 	state.Entries = sourceEntries
 	syncer.SaveState(dstDir, state)
 
