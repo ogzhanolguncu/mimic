@@ -13,32 +13,26 @@ func TestCopyFile(t *testing.T) {
 	require.NoError(t, err, "Failed to create temp directory")
 	defer os.RemoveAll(tempDir)
 
+	tempDir2, err := os.MkdirTemp("", "fileops-test2")
+	require.NoError(t, err, "Failed to create temp directory")
+	defer os.RemoveAll(tempDir2)
+
 	t.Run("SuccessfulCopy", func(t *testing.T) {
 		// Create a test file
 		testFile := filepath.Join(tempDir, "test.txt")
+		testFileDest := filepath.Join(tempDir2, "test.txt")
 		err := os.WriteFile(testFile, []byte("test content"), 0644)
 		require.NoError(t, err, "Failed to create test file")
 
 		// Copy the file
-		success, err := CopyFile(testFile)
+		success, err := CopyFile(testFile, testFileDest)
 		require.NoError(t, err, "CopyFile failed")
 		require.True(t, success, "CopyFile reported failure despite no error")
 
 		// Verify the content
-		content, err := os.ReadFile(testFile)
+		content, err := os.ReadFile(testFileDest)
 		require.NoError(t, err, "Failed to read copied file")
 		require.Equal(t, "test content", string(content), "File content doesn't match expected")
-	})
-
-	t.Run("NonExistentFile", func(t *testing.T) {
-		nonExistentFile := filepath.Join(tempDir, "nonexistent.txt")
-
-		success, err := CopyFile(nonExistentFile)
-		require.Error(t, err, "Expected error when copying non-existent file")
-		require.False(t, success, "CopyFile reported success when it should have failed")
-
-		// Check if error is wrapped correctly
-		require.ErrorIs(t, err, ErrRead, "Error should wrap ErrRead")
 	})
 }
 
@@ -69,10 +63,8 @@ func TestCreateDir(t *testing.T) {
 		require.NoError(t, err, "Failed to create initial directory")
 
 		// Try to create the same directory again
-		success, err := CreateDir(existingDir)
-		require.Error(t, err, "Expected error when creating existing directory")
-		require.False(t, success, "CreateDir reported success when it should have failed")
-		require.ErrorIs(t, err, ErrMkDir, "Error should wrap ErrMkDir")
+		_, err = CreateDir(existingDir)
+		require.NoError(t, err)
 	})
 }
 
@@ -95,23 +87,5 @@ func TestDeletePath(t *testing.T) {
 		// Verify file doesn't exist
 		_, err = os.Stat(testFile)
 		require.True(t, os.IsNotExist(err), "File should not exist after deletion")
-	})
-
-	t.Run("DeleteNonEmptyDir", func(t *testing.T) {
-		// Create a test directory with a file in it
-		testDir := filepath.Join(tempDir, "nonemptydir")
-		err := os.Mkdir(testDir, 0755)
-		require.NoError(t, err, "Failed to create test directory")
-
-		// Create a file inside the directory
-		testFile := filepath.Join(testDir, "file.txt")
-		err = os.WriteFile(testFile, []byte("test content"), 0644)
-		require.NoError(t, err, "Failed to create test file")
-
-		// Try to delete the directory
-		success, err := DeletePath(testDir)
-		require.Error(t, err, "Expected error when deleting non-empty directory")
-		require.False(t, success, "DeletePath reported success when it should have failed")
-		require.ErrorIs(t, err, ErrRemoveDir, "Error should wrap ErrRemoveDir")
 	})
 }

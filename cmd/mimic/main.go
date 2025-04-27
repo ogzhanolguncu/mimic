@@ -1,11 +1,11 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"log"
 	"log/slog"
 	"os"
+	"slices"
 
 	"github.com/ogzhanolguncu/mimic/internal/config"
 	"github.com/ogzhanolguncu/mimic/internal/syncer"
@@ -55,23 +55,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	logger.Info("Comparing states.")
+	logger.Info("Comparing states")
 	actions := syncer.CompareStates(sourceEntries, state.Entries)
-	log.Printf("\nFound %d actions to perform. Actions: %+v\n", len(actions), actions)
-
+	log.Printf("Found %d actions to perform", len(actions))
+	logger.Info("Executing states")
+	err = syncer.ExecuteActions(srcDir, dstDir, actions)
+	if err != nil {
+		log.Fatalf("Failed to execute actions %s", err.Error())
+	}
 	state.Entries = sourceEntries
 	syncer.SaveState(dstDir, state)
 
-	logger.Info("Sync process completed successfully.")
-
-	jsonData, err := json.MarshalIndent(sourceEntries, "", "  ")
-	if err != nil {
-		log.Printf("Error marshaling entries: %v", err)
-	} else {
-		log.Printf("Entries:\n%s", jsonData)
-	}
-
-	if err != nil {
-		log.Fatalf("Error scanning source: %v", err)
-	}
+	actions = slices.DeleteFunc(actions, func(a syncer.SyncAction) bool {
+		return a.Type == syncer.ActionNone
+	})
+	logger.Info("Sync process completed successfully", "actions", len(actions))
 }

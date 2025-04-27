@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/cespare/xxhash/v2"
+	"github.com/ogzhanolguncu/mimic/internal/fileops"
 )
 
 const (
@@ -162,7 +163,6 @@ func ScanSource(rootDir string) (map[string]EntryInfo, error) {
 }
 
 // exists checks if a path exists and returns its FileInfo.
-// Returns wrapped ErrNotExist or ErrRead on failure.
 func exists(path string) (os.FileInfo, error) {
 	fileInfo, err := os.Stat(path)
 	if err != nil {
@@ -316,4 +316,45 @@ func CompareStates(sourceScan, loadedStateEntries map[string]EntryInfo) []SyncAc
 	}
 
 	return syncActions
+}
+
+func ExecuteActions(srcRoot, dstRoot string, actions []SyncAction) error {
+	for _, action := range actions {
+		readPath := filepath.Join(srcRoot, action.RelativePath)
+		writePath := filepath.Join(dstRoot, action.RelativePath)
+
+		switch action.Type {
+		case ActionNone:
+			continue
+		case ActionCreate:
+			isDir := action.SourceInfo.IsDir
+			if isDir {
+				_, err := fileops.CreateDir(writePath)
+				if err != nil {
+					return err
+				}
+			} else {
+				_, err := fileops.CopyFile(readPath, writePath)
+				if err != nil {
+					return err
+				}
+			}
+		case ActionDelete:
+			_, err := fileops.DeletePath(writePath)
+			if err != nil {
+				return err
+			}
+		case ActionUpdate:
+			_, err := fileops.CopyFile(readPath, writePath)
+			if err != nil {
+				return err
+			}
+		default:
+			Logger.Error("unknown action",
+				"action", action.Type)
+
+		}
+
+	}
+	return nil
 }
